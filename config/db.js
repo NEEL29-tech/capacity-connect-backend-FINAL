@@ -137,7 +137,7 @@ if (hasExternalDb) {
  */
 async function testConnection() {
   try {
-    const result = await pool.query('SELECT NOW() AS current_time');
+    const result = await pool.query('SELECT NOW() AS currentTime');
 
     console.log(
       `[DB] Database connection successful${
