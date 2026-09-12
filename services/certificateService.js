@@ -1,257 +1,225 @@
-/**
- * Certificate Service
- * Capacity Connect LMS (SIH26075)
- *
- * Architecture:
- * routes -> controllers -> services -> PostgreSQL pool
- */
+const { pool } = require("../config/db");
 
-const crypto = require('crypto');
-const db = require('../config/db');
+// Generate certificate
+const generateCertificate = async ({ enrollmentId, userId }) => {
+  const client = await pool.connect();
 
-class CertificateService {
+  try {
+    await client.query("BEGIN");
 
-  /**
-   * Generate certificate for a completed enrollment
-   */
-  async generateCertificate({ enrollmentId, userId }) {
+    // Get enrollment, user and course details
+    const enrollmentResult = await client.query(
+  `
+  SELECT
+    e.id AS enrollment_id,
+    e.learner_id,
+    e.course_id,
+    e.status,
+    e.enrolled_at,
+    e.completed_at,
+    u.name AS learner_name,
+    u.email AS learner_email,
+    c.title AS course_title,
+    c.category,
+    c.level
+  FROM enrollments e
+  JOIN users u ON u.id = e.learner_id
+  JOIN courses c ON c.id = e.course_id
+  WHERE e.id = $1 AND e.learner_id = $2
+  `,
+  [enrollmentId, userId]
+);
 
-    if (!enrollmentId) {
-      const error = new Error('enrollmentId is required');
-      error.statusCode = 400;
-      throw error;
+    if (enrollmentResult.rows.length === 0) {
+      throw new Error("Enrollment not found or access denied");
     }
 
-    // 1. Fetch enrollment
-    const enrollRes = await db.query(`
-      SELECT
-        e.id,
-        e.learner_id,
-        e.course_id,
-        e.status,
-        e.completed_at,
-        c.title AS course_title,
-        u.name AS user_name
-      FROM enrollments e
-      JOIN courses c
-        ON e.course_id = c.id
-      JOIN users u
-        ON e.learner_id = u.id
-      WHERE e.id = $1
-    `, [enrollmentId]);
+    const enrollment = enrollmentResult.rows[0];
 
-    if (enrollRes.rows.length === 0) {
-      const error = new Error('Enrollment not found');
-      error.statusCode = 404;
-      throw error;
-    }
+    // Count total modules
+    const totalModulesResult = await client.query(
+      `
+      SELECT COUNT(*)::int AS total_modules
+      FROM modules
+      WHERE course_id = $1
+      `,
+      [enrollment.course_id]
+    );
 
-    const enrollment = enrollRes.rows[0];
+    const totalModules = totalModulesResult.rows[0].total_modules;
 
-    // 2. Verify ownership
-    // Number() handles JWT userId string vs PostgreSQL integer
-    if (Number(enrollment.learner_id) !== Number(userId)) {
-      const error = new Error(
-        'Forbidden: You can only generate certificates for your own completed courses'
+    // Count completed modules
+    const completedModulesResult = await client.query(
+      `
+      SELECT COUNT(*)::int AS completed_modules
+      FROM learning_progress lp
+      JOIN modules m ON m.id = lp.module_id
+      WHERE lp.enrollment_id = $1
+        AND m.course_id = $2
+        AND lp.completed = true
+      `,
+      [enrollmentId, enrollment.course_id]
+    );
+
+    const completedModules =
+      completedModulesResult.rows[0].completed_modules;
+
+    if (totalModules === 0 || completedModules !== totalModules) {
+      throw new Error(
+        `Course is not completed. Completed ${completedModules}/${totalModules} modules.`
       );
-      error.statusCode = 403;
-      throw error;
     }
 
-    // 3. Check completion status
-    if (enrollment.status !== 'COMPLETED') {
+    // Mark enrollment as completed
+    await client.query(
+      `
+      UPDATE enrollments
+      SET status = 'COMPLETED',
+          completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+      WHERE id = $1
+      `,
+      [enrollmentId]
+    );
 
-      const totalModsRes = await db.query(`
-        SELECT COUNT(*) AS cnt
-        FROM modules
-        WHERE course_id = $1
-      `, [enrollment.course_id]);
-
-      const doneModsRes = await db.query(`
-        SELECT COUNT(*) AS cnt
-        FROM learning_progress lp
-        JOIN modules m
-          ON lp.module_id = m.id
-        WHERE lp.enrollment_id = $1
-          AND lp.completed = true
-          AND m.course_id = $2
-      `, [
-        enrollmentId,
-        enrollment.course_id
-      ]);
-
-      const total = parseInt(
-        totalModsRes.rows[0].cnt,
-        10
-      ) || 0;
-
-      const done = parseInt(
-        doneModsRes.rows[0].cnt,
-        10
-      ) || 0;
-
-      if (total === 0 || done < total) {
-        const error = new Error(
-          `Course is not completed (${done}/${total} modules completed). Complete all modules to unlock your certificate.`
-        );
-
-        error.statusCode = 400;
-        throw error;
-      }
-
-      // All modules completed
-      await db.query(`
-        UPDATE enrollments
-        SET
-          status = 'COMPLETED',
-          completed_at = NOW()
-        WHERE id = $1
-      `, [enrollmentId]);
-
-      enrollment.status = 'COMPLETED';
-    }
-
-    // 4. Check duplicate certificate
-    const existingCert = await db.query(`
+    // Check existing certificate
+    const existingCertificateResult = await client.query(
+      `
       SELECT *
       FROM certificates
-      WHERE learner_id = $1
-        AND course_id = $2
-    `, [
-      enrollment.learner_id,
-      enrollment.course_id
-    ]);
+      WHERE user_id = $1 AND course_id = $2
+      `,
+      [userId, enrollment.course_id]
+    );
 
-    if (existingCert.rows.length > 0) {
-      return existingCert.rows[0];
-    }
+    if (existingCertificateResult.rows.length > 0) {
+      await client.query("COMMIT");
 
-    // 5. Generate unique certificate number
-    const randomHex = crypto
-      .randomBytes(4)
-      .toString('hex')
-      .toUpperCase();
-
-    const certificateNumber =
-      `CAP-${new Date().getFullYear()}-${enrollment.course_id}-${randomHex}`;
-
-    // 6. Insert certificate
-    const insertRes = await db.query(`
-      INSERT INTO certificates
-      (
-        learner_id,
-        course_id,
-        certificate_number,
-        issued_at,
-        certificate_url
-      )
-      VALUES
-      (
-        $1,
-        $2,
-        $3,
-        NOW(),
-        $4
-      )
-      RETURNING *
-    `, [
-      enrollment.learner_id,
-      enrollment.course_id,
-      certificateNumber,
-      null
-    ]);
-
-    return insertRes.rows[0];
-  }
-
-
-  /**
-   * Get all certificates belonging to learner
-   */
-  async getLearnerCertificates(userId) {
-
-    const res = await db.query(`
-      SELECT
-        cert.id,
-        cert.certificate_number,
-        cert.issued_at,
-        cert.certificate_url,
-        c.id AS course_id,
-        c.title AS course_title,
-        c.category,
-        c.level,
-        u.name AS learner_name
-      FROM certificates cert
-      JOIN courses c
-        ON cert.course_id = c.id
-      JOIN users u
-        ON cert.learner_id = u.id
-      WHERE cert.learner_id = $1
-      ORDER BY cert.issued_at DESC
-    `, [userId]);
-
-    return res.rows;
-  }
-
-
-  /**
-   * Public certificate verification
-   */
-  async verifyCertificate(certificateNumber) {
-
-    if (!certificateNumber) {
-      const error = new Error(
-        'Certificate number is required'
-      );
-
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const cleanNumber =
-      certificateNumber.trim().toUpperCase();
-
-    const res = await db.query(`
-      SELECT
-        cert.id,
-        cert.certificate_number,
-        cert.issued_at,
-        cert.certificate_url,
-        c.title AS course_title,
-        c.category AS course_category,
-        u.name AS learner_name,
-        u.email AS learner_email
-      FROM certificates cert
-      JOIN courses c
-        ON cert.course_id = c.id
-      JOIN users u
-        ON cert.learner_id = u.id
-      WHERE UPPER(cert.certificate_number) = $1
-    `, [cleanNumber]);
-
-    // Certificate not found
-    if (res.rows.length === 0) {
       return {
-        isValid: false,
-        message:
-          'Certificate not found or invalid certificate number'
+        message: "Certificate already exists",
+        certificate: existingCertificateResult.rows[0],
       };
     }
 
-    const cert = res.rows[0];
+    // Generate certificate code
+    const certificateCode = `CAP-${new Date().getFullYear()}-${enrollment.course_id}-${Date.now()}`;
+
+    const metadata = JSON.stringify({
+      learnerName: enrollment.learner_name,
+      learnerEmail: enrollment.learner_email,
+      courseName: enrollment.course_title,
+      totalModules,
+      completedModules,
+      completionPercentage: 100,
+    });
+
+    // Insert certificate
+    const certificateResult = await client.query(
+      `
+      INSERT INTO certificates (
+        user_id,
+        course_id,
+        enrollment_id,
+        certificate_code,
+        issue_date,
+        certificate_url,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, NULL, $5)
+      RETURNING *
+      `,
+      [
+        userId,
+        enrollment.course_id,
+        enrollmentId,
+        certificateCode,
+        metadata,
+      ]
+    );
+
+    await client.query("COMMIT");
 
     return {
-      isValid: true,
-      certificateNumber: cert.certificate_number,
-      issuedAt: cert.issued_at,
-      learnerName: cert.learner_name,
-      courseTitle: cert.course_title,
-      courseCategory: cert.course_category,
-      certificateUrl: cert.certificate_url,
-      issuingAuthority:
-        'Capacity Connect - Digital Capacity Building Portal (SIH26075)'
+      message: "Certificate generated successfully",
+      certificate: {
+        ...certificateResult.rows[0],
+        learnerName: enrollment.learner_name,
+        learnerEmail: enrollment.learner_email,
+        courseName: enrollment.course_title,
+        category: enrollment.category,
+        level: enrollment.level,
+        totalModules,
+        completedModules,
+        completionPercentage: 100,
+      },
     };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-}
+};
 
-module.exports = new CertificateService();
+
+// Get learner certificates
+const getMyCertificates = async (userId) => {
+  const result = await pool.query(
+    `
+    SELECT
+      cert.id,
+      cert.certificate_code,
+      cert.issue_date,
+      cert.certificate_url,
+      cert.metadata,
+      c.title AS course_name,
+      c.category,
+      c.level,
+      u.name AS learner_name,
+      u.email AS learner_email
+    FROM certificates cert
+    JOIN courses c ON c.id = cert.course_id
+    JOIN users u ON u.id = cert.user_id
+    WHERE cert.user_id = $1
+    ORDER BY cert.issue_date DESC
+    `,
+    [userId]
+  );
+
+  return result.rows;
+};
+
+
+// Public certificate verification
+const verifyCertificate = async (certificateCode) => {
+  const result = await pool.query(
+    `
+    SELECT
+      cert.certificate_code,
+      cert.issue_date,
+      cert.certificate_url,
+      c.title AS course_name,
+      c.category,
+      c.level,
+      u.name AS learner_name,
+      u.email AS learner_email
+    FROM certificates cert
+    JOIN courses c ON c.id = cert.course_id
+    JOIN users u ON u.id = cert.user_id
+    WHERE cert.certificate_code = $1
+    `,
+    [certificateCode]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  return result.rows[0];
+};
+
+
+module.exports = {
+  generateCertificate,
+  getMyCertificates,
+  verifyCertificate,
+};
