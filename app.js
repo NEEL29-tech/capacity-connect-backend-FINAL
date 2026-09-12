@@ -24,6 +24,8 @@ const adminRoutes = require("./routes/adminRoutes");
 const assignmentRoutes = require("./routes/assignmentRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
+const unitRoutes = require("./routes/unitRoutes");
+const topicRoutes = require("./routes/topicRoutes");
 
 const app = express();
 
@@ -70,6 +72,8 @@ app.use("/api/trainer", trainerRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/assignments", assignmentRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/units", unitRoutes);
+app.use("/api/topics", topicRoutes);
 
 // Upload Routes
 app.use("/api/upload", uploadRoutes);
