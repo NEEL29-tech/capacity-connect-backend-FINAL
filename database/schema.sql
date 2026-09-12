@@ -7,11 +7,13 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(20),
     role VARCHAR(50) NOT NULL,
     bio TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
 
 -- 2. Courses Table
 CREATE TABLE IF NOT EXISTS courses (
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS courses (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+
 -- 3. Modules Table
 CREATE TABLE IF NOT EXISTS modules (
     id SERIAL PRIMARY KEY,
@@ -36,6 +39,7 @@ CREATE TABLE IF NOT EXISTS modules (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
 
 -- 4. Module Contents Table
 CREATE TABLE IF NOT EXISTS module_contents (
@@ -50,20 +54,23 @@ CREATE TABLE IF NOT EXISTS module_contents (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+
 -- 5. Enrollments Table
 CREATE TABLE IF NOT EXISTS enrollments (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    learner_id INTEGER NOT NULL REFERENCES users(id),
     course_id INTEGER NOT NULL REFERENCES courses(id),
     status VARCHAR(50) DEFAULT 'ACTIVE',
+    progress_percentage NUMERIC(5,2) DEFAULT 0.00,
     enrolled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (user_id, course_id)
+    UNIQUE (learner_id, course_id)
 );
 
--- 6. Learning Progress Table (Explicitly defined in prompt)
+
+-- 6. Learning Progress Table
 CREATE TABLE IF NOT EXISTS learning_progress (
     id SERIAL PRIMARY KEY,
     enrollment_id INTEGER NOT NULL REFERENCES enrollments(id),
@@ -74,6 +81,7 @@ CREATE TABLE IF NOT EXISTS learning_progress (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (enrollment_id, module_id)
 );
+
 
 -- 7. Quizzes Table
 CREATE TABLE IF NOT EXISTS quizzes (
@@ -90,6 +98,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+
 -- 8. Quiz Questions Table
 CREATE TABLE IF NOT EXISTS quiz_questions (
     id SERIAL PRIMARY KEY,
@@ -103,11 +112,12 @@ CREATE TABLE IF NOT EXISTS quiz_questions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+
 -- 9. Quiz Attempts Table
 CREATE TABLE IF NOT EXISTS quiz_attempts (
     id SERIAL PRIMARY KEY,
     quiz_id INTEGER NOT NULL REFERENCES quizzes(id),
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    learner_id INTEGER NOT NULL REFERENCES users(id),
     score NUMERIC DEFAULT 0.0,
     percentage NUMERIC DEFAULT 0.0,
     passed BOOLEAN DEFAULT FALSE,
@@ -116,6 +126,7 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
     submitted_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
 
 -- 10. Quiz Attempt Answers Table
 CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
@@ -128,6 +139,7 @@ CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+
 -- 11. Competencies Table
 CREATE TABLE IF NOT EXISTS competencies (
     id SERIAL PRIMARY KEY,
@@ -137,6 +149,7 @@ CREATE TABLE IF NOT EXISTS competencies (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
 
 -- 12. Course Competencies Table
 CREATE TABLE IF NOT EXISTS course_competencies (
@@ -148,16 +161,18 @@ CREATE TABLE IF NOT EXISTS course_competencies (
     UNIQUE (course_id, competency_id)
 );
 
+
 -- 13. Learner Competencies Table
 CREATE TABLE IF NOT EXISTS learner_competencies (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    learner_id INTEGER NOT NULL REFERENCES users(id),
     competency_id INTEGER NOT NULL REFERENCES competencies(id),
     proficiency_level VARCHAR(50) DEFAULT 'BEGINNER',
     acquired_from VARCHAR(100) DEFAULT 'SELF_ASSESSMENT',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (user_id, competency_id)
+    UNIQUE (learner_id, competency_id)
 );
+
 
 -- 14. Assignments Table
 CREATE TABLE IF NOT EXISTS assignments (
@@ -173,11 +188,12 @@ CREATE TABLE IF NOT EXISTS assignments (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+
 -- 15. Assignment Submissions Table
 CREATE TABLE IF NOT EXISTS assignment_submissions (
     id SERIAL PRIMARY KEY,
     assignment_id INTEGER NOT NULL REFERENCES assignments(id),
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    learner_id INTEGER NOT NULL REFERENCES users(id),
     submission_text TEXT,
     file_url TEXT,
     score NUMERIC,
@@ -186,24 +202,26 @@ CREATE TABLE IF NOT EXISTS assignment_submissions (
     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     graded_at TIMESTAMP,
     graded_by INTEGER REFERENCES users(id),
-    UNIQUE (assignment_id, user_id)
+    UNIQUE (assignment_id, learner_id)
 );
+
 
 -- 16. Certificates Table
 CREATE TABLE IF NOT EXISTS certificates (
     id SERIAL PRIMARY KEY,
     certificate_code VARCHAR(100) UNIQUE NOT NULL,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    learner_id INTEGER NOT NULL REFERENCES users(id),
     course_id INTEGER NOT NULL REFERENCES courses(id),
     enrollment_id INTEGER NOT NULL REFERENCES enrollments(id),
     issue_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     certificate_url TEXT,
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (user_id, course_id)
+    UNIQUE (learner_id, course_id)
 );
 
--- 17. Knowledge Resources Table (Phase 8)
+
+-- 17. Knowledge Resources Table
 CREATE TABLE IF NOT EXISTS knowledge_resources (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
@@ -217,10 +235,11 @@ CREATE TABLE IF NOT EXISTS knowledge_resources (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 18. Notifications Table (Phase 12)
+
+-- 18. Notifications Table
 CREATE TABLE IF NOT EXISTS notifications (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    learner_id INTEGER NOT NULL REFERENCES users(id),
     title VARCHAR(255) NOT NULL,
     message TEXT NOT NULL,
     type VARCHAR(50) DEFAULT 'INFO',
